@@ -1,4 +1,4 @@
-// CholeskyMPI.cpp: определяет точку входа для консольного приложения.
+// CholeskyMPI.cpp: РѕРїСЂРµРґРµР»В¤РµС‚ С‚РѕС‡РєСѓ РІС…РѕРґР° РґР»В¤ РєРѕРЅСЃРѕР»СЊРЅРѕРіРѕ РїСЂРёР»РѕР¶РµРЅРёВ¤.
 //
 
 #include "stdafx.h"
@@ -7,6 +7,7 @@
 #include "MatrixBuilder.h"
 #include "SolveByCholesky.h"
 #include <omp.h>
+#include "mpi.h"
 
 #include <stdlib.h>
 
@@ -14,31 +15,99 @@ int main()
 {
 	setlocale(LC_ALL, "rus");
 
-	std::vector<int> threadsNum = { 1, 2, 4, 6, 8 };
-	std::vector<int> matrixDimension = { 10, 100, 1000, 3000, 6000 };
+	int n;
+	std::cout << "В¬РІРµРґРёС‚Рµ СЂР°Р·РјРµСЂРЅРѕСЃС‚СЊ РјР°С‚СЂРёС†С‹";
+	std::cin >> n;
 
-	for (int i : matrixDimension)
+	std::vector<std::vector<double>> matrixA = MatrixBuilder::createSymmetricMatrix(n);
+	std::vector<double> vectorB = matrixA[0];
+
+	std::vector<std::vector<double>> L;
+
+	L.resize(n);
+
+	for (int i = 0; i < L.size(); i++)
+		L[i].resize(n);
+
+	int rank;
+	int size;
+	double startTime = omp_get_wtime();
+
+	MPI_Init(NULL, NULL);
+
+	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+
+	MPI_Comm_size(MPI_COMM_WORLD, &size);
+
+	int kol = n / size;
+	double sum = 0.0;
+
+	for (int i = 1; i <n; i++)
 	{
 
-		std::cout << "Размерность матрицы: " << i << std::endl;
-
-		std::vector<std::vector<double>> matrixA = MatrixBuilder::createSymmetricMatrix(i);
-		std::vector<double> vectorB = matrixA[0];
-
-		double startTime;
-
-		for (int j : threadsNum)
+		for (int h = rank * kol; h < (rank + 1)*kol; h++)
 		{
-			startTime = omp_get_wtime();
-			std::vector<double> result = SolveByCholesky::solveLinearSystem(matrixA, vectorB, j);
-			std::cout << "Время выполнения параллельного алгоритма при " << j 
-				<< " потоках(е): " << omp_get_wtime() - startTime << std::endl;
+			if (h >= i)
+			{
+				sum = 0.0;
+				for (int p = 0; p <= i - 1; p++)
+				{
+					sum = sum + L[i][p] * L[i][p];
+				}
+
+				L[i][i] = sqrt(fabs(matrixA[n*i][i] - sum));
+
+				MPI_Bcast(&L[i][i], 1, MPI_DOUBLE, rank, MPI_COMM_WORLD);
+
+				sum = 0.0;
+
+				for (int p = 0; p <= i - 1; p++)
+				{
+					sum = sum + L[i][p] * L[h][p];
+				}
+
+				L[h][i] = (matrixA[n*h][i] - sum) / L[i][i];
+
+				MPI_Bcast(&L[h][i], 1, MPI_DOUBLE, rank, MPI_COMM_WORLD);
+			}
 		}
-		std::cout << std::endl;
 	}
 
+	MPI_Finalize();
+
+	std::vector<std::vector<double>>  transMatrixL = MatrixBuilder::transpositionMatrix(L);
+
+	std::vector<double> vectorX;
+	vectorX.resize(n);
+
+	std::vector<double> vectorY;
+	vectorY.resize(n);
+
+	double sum1;
+	double sum2;
+
+	for (int i = 0; i < n; i++)
+	{
+		sum1 = 0;
+		for (int j = 0; j < i; j++)
+		{
+			sum1 += vectorY[j] * L[i][j];
+		}
+
+		vectorY[i] = (vectorB[i] - sum1) / L[i][i];
+	}
+
+	for (int i = n - 1; i >= 0; i--)
+	{
+		sum2 = 0;
+		for (int j = n - 1; j > i; j--) {
+			sum2 += vectorX[j] * transMatrixL[i][j];
+		}
+		vectorX[i] = (vectorY[i] - sum2) / transMatrixL[i][i];
+	}
+
+	std::cout << "В¬СЂРµРјВ¤ РІС‹РїРѕР»РЅРµРЅРёВ¤ РїР°СЂР°Р»Р»РµР»СЊРЅРѕРіРѕ Р°Р»РіРѕСЂРёС‚РјР°" << omp_get_wtime() - startTime << std::endl;
 	system("pause");
 
     return 0;
 }
-
